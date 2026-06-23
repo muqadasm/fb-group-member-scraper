@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fb-group-member-scraper"
+version = "1.0.0"
+description = "Permission-based Facebook group member scraper using Playwright."
+requires-python = ">=3.10"
+dependencies = [
+    "playwright==1.45.0",
+    "python-dateutil==2.9.0.post0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.2.2"]
+
+[project.scripts]
+fb-group-members = "fb_group_member_scraper.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
