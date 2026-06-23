@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urljoin
 
-from playwright.async_api import BrowserContext, Page, async_playwright
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError, async_playwright
 
 from .date_parser import parse_joined_date
 from .models import MemberRecord
@@ -18,11 +19,16 @@ class FacebookGroupMemberScraper:
         headed: bool = True,
         slow_mo_ms: int = 80,
         scroll_pause_seconds: float = 1.8,
+        navigation_timeout_ms: int = 90_000,
+        retries: int = 2,
     ) -> None:
         self.user_data_dir = user_data_dir
         self.headed = headed
         self.slow_mo_ms = slow_mo_ms
         self.scroll_pause_seconds = scroll_pause_seconds
+        self.navigation_timeout_ms = navigation_timeout_ms
+        self.retries = retries
+        self.logger = logging.getLogger(__name__)
 
     async def scrape_group(
         self,
@@ -39,12 +45,31 @@ class FacebookGroupMemberScraper:
             )
             try:
                 page = context.pages[0] if context.pages else await context.new_page()
-                await page.goto(group_url, wait_until="domcontentloaded", timeout=90_000)
+                await self.goto_with_retries(page, group_url)
                 await self.wait_for_user_login(page)
                 await self.scroll_members_page(page, max_scrolls=max_scrolls)
                 return await self.collect_member_cards(page, group_url, joined_after)
             finally:
                 await context.close()
+
+    async def goto_with_retries(self, page: Page, url: str) -> None:
+        last_error: Exception | None = None
+
+        for attempt in range(1, self.retries + 2):
+            try:
+                self.logger.info("Opening %s (attempt %s)", url, attempt)
+                await page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=self.navigation_timeout_ms,
+                )
+                return
+            except PlaywrightTimeoutError as error:
+                last_error = error
+                self.logger.warning("Timed out opening %s on attempt %s", url, attempt)
+                await page.wait_for_timeout(1500 * attempt)
+
+        raise RuntimeError(f"Could not open {url} after {self.retries + 1} attempts") from last_error
 
     async def wait_for_user_login(self, page: Page) -> None:
         login_selectors = [
@@ -67,7 +92,7 @@ class FacebookGroupMemberScraper:
         last_height = 0
         stable_rounds = 0
 
-        for _ in range(max_scrolls):
+        for round_number in range(1, max_scrolls + 1):
             await page.mouse.wheel(0, 1800)
             await page.wait_for_timeout(int(self.scroll_pause_seconds * 1000))
             current_height = await page.evaluate("document.body.scrollHeight")
@@ -75,6 +100,7 @@ class FacebookGroupMemberScraper:
             if current_height == last_height:
                 stable_rounds += 1
                 if stable_rounds >= 3:
+                    self.logger.info("Page height stabilized after %s scroll rounds", round_number)
                     break
             else:
                 stable_rounds = 0
@@ -91,6 +117,7 @@ class FacebookGroupMemberScraper:
 
         card_locators = page.locator("div[role='article'], div[data-visualcompletion='ignore-dynamic']")
         count = await card_locators.count()
+        self.logger.info("Found %s candidate member cards", count)
 
         for index in range(count):
             card = card_locators.nth(index)
