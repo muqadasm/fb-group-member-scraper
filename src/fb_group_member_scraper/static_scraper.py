@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from .date_parser import parse_joined_date
 from .facebook_scraper import extract_joined_text, extract_role_text, normalize_facebook_url
@@ -104,4 +105,8 @@ def path_from_file_url(page_url: str) -> Path:
     parsed = urlparse(page_url)
     if parsed.scheme != "file":
         raise ValueError(f"Static scraper only supports file URLs, got: {page_url}")
-    return Path(unquote(parsed.path.lstrip("/")))
+
+    path = url2pathname(parsed.path)
+    if parsed.netloc:
+        path = f"//{parsed.netloc}{path}"
+    return Path(path)
